@@ -81,5 +81,36 @@ npm run dev
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
 
+## 归集证据与交接验件（app.evidence）
+
+列表 CSV 只能给出清单索引，无法凭下载清单复核某个采集批次的原始字节。
+`backend/app/evidence` 是一套纯标准库、磁盘内容寻址的证据子系统，让交接包
+按实际归集内容验件，挂载在 `/api/evidence/*`：
+
+| 文件 | 职责 |
+| --- | --- |
+| `app/evidence/store.py` | 内容寻址原件仓：sha256 为主键，只新增不覆盖；catalog 间接层支持「复制→复核→换定位→删旧」的安全迁移，以及丢失/按原摘要恢复 |
+| `app/evidence/registry.py` | 归集登记：来源编号 `执行#序号` 唯一不复用；同名更正只追加，旧条目转 superseded 且原字节保留 |
+| `app/evidence/export.py` | 证据导出：按执行导出来源编号、执行编号、字节大小、sha256、版本状态的证据 CSV，行级回调可覆盖导出途中迁移 |
+| `app/evidence/transfer.py` | 断点续传下载：会话固定证据快照与签收人，按来源编号取件、offset 续传、前缀复核；中断可续，更正件无法替换在途内容，重复核验不重复计缺件 |
+| `app/evidence/handoff.py` | 交接验件：读入证据件按来源定位原件并复核摘要，分别报告 `ok / missing / mismatch`，缺件给出待恢复的原归集编号 |
+| `app/routers/evidence.py` | 12 个 HTTP 接口：collect、correct、export、migrate、mark-lost、restore、state、downloads、verify 等 |
+
+关键保证：
+
+- **来源可追溯**：证据每行带 `source_id`、`run_id`、`sha256`，指出内容来自哪次归集。
+- **更正不毁原件**：补报同名更正件产生新来源编号；旧版本仍被旧任务/旧证据引用，
+  原字节在内容寻址仓中不会被替换或删除。
+- **迁移不影响验件**：物理路径迁移只改 catalog 定位，来源编号与摘要不变；
+  导出/下载按现势 catalog 取件，真正物理丢失才报缺件。
+- **在途不可替换**：下载项固定 `(source_id, sha256)`，按来源编号取该条目自己的
+  摘要，另一次执行的同名件、同名更正件都无法顶替。
+- **可恢复且不重计**：中断后签收人凭原证据续验；阻塞件在原件修复后重新判定，
+  同一来源编号在重复核验中只计一条缺件；恢复字节与原摘要不符一律拒绝（422）。
+
+运行期数据默认落在 `backend/var/evidence/`（已在 `.gitignore` 忽略），
+测试通过临时目录隔离。测试见 `backend/tests/test_evidence_handoff.py`
+（领域场景 16 例）与 `test_evidence_api.py`（路由冒烟 6 例）。
+
 领域：数据工程
 子方向：数据采集、爬虫与RPA

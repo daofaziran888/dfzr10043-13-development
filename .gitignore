@@ -94,3 +94,7 @@ desktop.ini
 *.db
 *.pid
 *.seed
+
+# 归集证据子系统的本地原件仓、登记台账与下载会话
+var/
+backend/var/
